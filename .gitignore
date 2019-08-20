@@ -1,0 +1,12 @@
+.envrc
+.direnv/
+.vscode/
+data/
+redis/
+*.egg-info
+__pycache__
+*.pyc
+
+*.mp4
+*.mkv
+*.ts
