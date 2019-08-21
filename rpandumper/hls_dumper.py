@@ -11,6 +11,7 @@ import traceback
 from collections import defaultdict
 
 import aiohttp
+import aioredis
 
 
 logger = logging.getLogger("rpandumper")
@@ -26,6 +27,14 @@ class HLSDumper:
         self.tasks = []
         self.sockets_ingesting = {}
 
+        # Redis
+        self.redis = aioredis.create_redis_pool(
+            os.environ.get("REDIS_URL", "redis://localhost"),
+            minsize=5,
+            maxsize=69,  # hehe 69
+            loop=loop,
+        )
+
         # Setup HTTP session
         conn = aiohttp.TCPConnector(limit=0)  # Uncap the max HTTP connections.
         self.session = aiohttp.ClientSession(
@@ -36,14 +45,37 @@ class HLSDumper:
             connector=conn,
         )
 
+        self.science = defaultdict(lambda: 0)
+
     def loop_error(self, loop, context):
         print(context)
+
+    # Science
+    async def thanos_cock(self):
+        while self.running:
+            # Update socket count
+            self.science["hls_count"] = 0
+
+            for task in self.sockets_ingesting.values():
+                if task and not task.done():
+                    self.science["hls_count"] += 1
+
+            # Update redis science hash.
+            await self.redis.hmset_dict("rpan:science:hlsdumper", self.science)
+
+            # Sleep for 3 seconds.
+            await asyncio.sleep(3)
+
+    def science_incr(self, key):
+        self.science[key] += 1
 
     # Seed related code
     async def scrape_seed(self):
         while self.running:
             await asyncio.sleep(5)
             async with self.session.get("https://strapi.reddit.com/videos/seed", allow_redirects=True) as response:
+                self.science_incr("seed_fetch")
+
                 # Parse data JSON.
                 _data = await response.text()
 
@@ -59,6 +91,9 @@ class HLSDumper:
                 if not seed_data:
                     logging.debug("Seed data is empty?")
                     logging.debug(data)
+                    self.science_incr("empty_seed")
+                    continue
+
                 await self.parse_seed(seed_data)
 
     async def parse_seed(self, seed_data: dict):
@@ -80,6 +115,7 @@ class HLSDumper:
                 return
 
         self.sockets_ingesting[stream_id] = self.loop.create_task(self._vore_hls(stream_id, hls_url))
+        self.science_incr("hls_opened")
 
     async def _vore_hls(self, stream_id: str, hls_url: str):
         # disgusting hardcoded path
@@ -97,16 +133,22 @@ class HLSDumper:
 
         stdout, stderr = await proc.communicate()
         logger.debug(f'[{stream_id} exited with {proc.returncode}]')
+        self.science_incr("ffmpeg_status_%s" % (proc.returncode))
 
     # Management code
     async def _run(self):
+        self.redis = await self.redis
+
         # Tasks
         self.tasks.append(asyncio.create_task(self.scrape_seed()))
+        self.tasks.append(asyncio.create_task(self.thanos_cock()))
 
         # Hold until all tasks are done.
         await asyncio.gather(*self.tasks)
 
     async def cleanup(self):
+        self.redis.close()
+        await self.redis.wait_closed()
         self.running = False
 
     def run(self):

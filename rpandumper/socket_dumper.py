@@ -142,7 +142,7 @@ class Dumper:
             await asyncio.sleep(3)
 
     def science_incr(self, key):
-        self.science["key"] += 1
+        self.science[key] += 1
 
     # Seed related code
     async def scrape_seed(self):
@@ -168,6 +168,8 @@ class Dumper:
                     logger.debug("Seed data is empty?")
                     logger.debug(data)
                     self.science_incr("empty_seed")
+                    continue
+
                 await self.parse_seed(seed_data)
 
     async def parse_seed(self, seed_data: dict):
@@ -232,6 +234,7 @@ class Dumper:
 
                         if msg.type == aiohttp.WSMsgType.TEXT:
                             self.ingest_queue.put(IngestItem("socket:" + socket_id, msg.data))
+                            self.science_incr("event_queued")
                         elif msg.type == aiohttp.WSMsgType.ERROR:
                             logger.debug("Stream %s errored.", socket_id)
                             self.science_incr("socket_error")
