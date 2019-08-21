@@ -9,29 +9,22 @@ import ssl
 import sys
 import datetime
 import traceback
+import random
 
 from collections import defaultdict
 
 import aiohttp
 import aioredis
 
-from rpandumper.common import create_praw
+from rpandumper.common import create_praw, IngestItem
 
 logger = logging.getLogger("rpandumper")
 
 # XXX HACK LOL
 logger.setLevel(level=logging.DEBUG)
 ALL_SCOPES = ['creddits', 'modcontributors', 'modmail', 'modconfig', 'subscribe', 'structuredstyles', 'vote', 'wikiedit', 'mysubreddits', 'submit', 'modlog', 'modposts', 'modflair', 'save', 'modothers', 'read', 'privatemessages', 'report', 'identity', 'livemanage', 'account', 'modtraffic', 'wikiread', 'edit', 'modwiki', 'modself', 'history', 'flair']
-
-class IngestItem:
-    __slots__ = ["tag", "time", "data"]
-    def __init__(self, tag: str, data: str):
-        self.tag = tag
-        self.data = data
-
-        self.time = int(time.time())
-
 SSL_PROTOCOLS = (asyncio.sslproto.SSLProtocol,)
+
 try:
     import uvloop.loop
 except ImportError:
@@ -39,56 +32,10 @@ except ImportError:
 else:
     SSL_PROTOCOLS = (*SSL_PROTOCOLS, uvloop.loop.SSLProtocol)
 
-def ignore_aiohttp_ssl_eror(loop):
-    """Ignore aiohttp #3535 / cpython #13548 issue with SSL data after close
-
-    There is an issue in Python 3.7 up to 3.7.3 that over-reports a
-    ssl.SSLError fatal error (ssl.SSLError: [SSL: KRB5_S_INIT] application data
-    after close notify (_ssl.c:2609)) after we are already done with the
-    connection. See GitHub issues aio-libs/aiohttp#3535 and
-    python/cpython#13548.
-
-    Given a loop, this sets up an exception handler that ignores this specific
-    exception, but passes everything else on to the previous exception handler
-    this one replaces.
-
-    Checks for fixed Python versions, disabling itself when running on 3.7.4+
-    or 3.8.
-
-    """
-    if sys.version_info >= (3, 7, 4):
-        return
-
-    orig_handler = loop.get_exception_handler()
-
-    def ignore_ssl_error(loop, context):
-        if context.get("message") in {
-            "SSL error in data received",
-            "Fatal error on transport",
-        }:
-            # validate we have the right exception, transport and protocol
-            exception = context.get('exception')
-            protocol = context.get('protocol')
-            if (
-                isinstance(exception, ssl.SSLError)
-                and exception.reason == 'KRB5_S_INIT'
-                and isinstance(protocol, SSL_PROTOCOLS)
-            ):
-                if loop.get_debug():
-                    asyncio.log.logger.debug('Ignoring asyncio SSL KRB5_S_INIT error')
-                return
-        if orig_handler is not None:
-            orig_handler(loop, context)
-        else:
-            loop.default_exception_handler(context)
-
-    loop.set_exception_handler(ignore_ssl_error)
-
 class Dumper:
     def __init__(self, loop: asyncio.BaseEventLoop):
         self.loop = loop
         self.loop.set_exception_handler(self.loop_error)
-        ignore_aiohttp_ssl_eror(loop)
         self.running = True
         self.tasks = []
         self.ingest_queue = queue.Queue()
@@ -107,12 +54,45 @@ class Dumper:
         self.session = aiohttp.ClientSession(
             loop=loop,
             headers={
-                "User-Agent": "RPAN dumper sponsored by u/nepeat"
+                "User-Agent": "RPAN socket dumper sponsored by u/nepeat"
             },
             connector=conn,
         )
 
     def loop_error(self, loop, context):
+        """Ignore aiohttp #3535 / cpython #13548 issue with SSL data after close
+
+        There is an issue in Python 3.7 up to 3.7.3 that over-reports a
+        ssl.SSLError fatal error (ssl.SSLError: [SSL: KRB5_S_INIT] application data
+        after close notify (_ssl.c:2609)) after we are already done with the
+        connection. See GitHub issues aio-libs/aiohttp#3535 and
+        python/cpython#13548.
+
+        Given a loop, this sets up an exception handler that ignores this specific
+        exception, but passes everything else on to the previous exception handler
+        this one replaces.
+
+        Checks for fixed Python versions, disabling itself when running on 3.7.4+
+        or 3.8.
+
+        """
+        if sys.version_info <= (3, 7, 4):
+            if context.get("message") in {
+                "SSL error in data received",
+                "Fatal error on transport",
+            }:
+                # validate we have the right exception, transport and protocol
+                exception = context.get('exception')
+                protocol = context.get('protocol')
+                if (
+                    isinstance(exception, ssl.SSLError)
+                    and exception.reason == 'KRB5_S_INIT'
+                    and isinstance(protocol, SSL_PROTOCOLS)
+                ):
+                    if loop.get_debug():
+                        asyncio.log.logger.debug('Ignoring asyncio SSL KRB5_S_INIT error')
+                    return
+
         print(context)
 
     # Ingest / Utility
@@ -123,10 +103,11 @@ class Dumper:
 
     async def process_queues(self):
         while self.running:
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(0.1)
             while not self.ingest_queue.empty():
                 item = self.ingest_queue.get()
                 await self.redis.zadd("rpan:events:" + item.tag, item.time, item.data)
+                await self.redis.publish("rpan:events:" + item.tag, item.data)
 
     @property
     def reddit_headers(self):
@@ -137,22 +118,10 @@ class Dumper:
             "Authorization": "Bearer " + self.reddit._core._authorizer.access_token
         }
 
-    async def do_heartbeats(self):
-        # https://strapi.reddit.com/videos/t3_ct2etl/heartbeat
-        while self.running:
-            # for name in self.sockets_ingesting.keys():
-            #     if not name.startswith("comments_"):
-            #         continue
-                
-            #     post = name.lstrip("comments_")
-            #     async with self.session.post(f"https://oauth.reddit.com/videos/{post}/heartbeat", headers=self.reddit_headers) as req:
-            #         print(await req.text())
-            await asyncio.sleep(5)
-
     # Seed related code
     async def scrape_seed(self):
         while self.running:
-            await asyncio.sleep(5)
+            await asyncio.sleep(3)
             async with self.session.get("https://strapi.reddit.com/videos/seed", allow_redirects=True) as response:
                 # Parse data JSON.
                 _data = await response.text()
@@ -162,14 +131,14 @@ class Dumper:
                     data = json.loads(_data)
                 except json.JSONDecodeError:
                     logger.warning("Couldn't parse seed data. Status code %d.", response.status)
-                    logging.debug(_data)
+                    logger.debug(_data)
                     continue
 
                 # Save data and parse.
                 seed_data = data.get("data", [])
                 if not seed_data:
-                    logging.debug("Seed data is empty?")
-                    logging.debug(data)
+                    logger.debug("Seed data is empty?")
+                    logger.debug(data)
                 await self.parse_seed(seed_data)
 
     async def parse_seed(self, seed_data: dict):
@@ -188,7 +157,14 @@ class Dumper:
                 live_comments_websocket = post_data.get("liveCommentsWebsocket", None)
                 if live_comments_websocket:
                     # DIRTY HACK
-                    live_comments_websocket = live_comments_websocket.replace("reddit.com", "ws-05b875714591d37f6.wss.redditmedia.com")
+                    wsdomain = random.choice([
+                        "05ba9e4989f78959d",
+                        "00b2ec7e0811b4d7a",
+                        "05b875714591d37f6",
+                        "093e8f4e67ed67e08",
+                        "021face97bba27158",
+                    ])
+                    live_comments_websocket = live_comments_websocket.replace("reddit.com", f"ws-{wsdomain}.wss.redditmedia.com")
                     await self.vore_socket("comments_" + post_data["id"], live_comments_websocket)
 
     # Websocket ingest code
@@ -207,28 +183,43 @@ class Dumper:
             logger.debug("bogon")
             return
 
+        # Loop that reconnects connections
         while self.running and connected:
+            # Primitive sleep for each failure.
+            await asyncio.sleep((failures * 0.5) + .5)
+
+            # Shut the connections attempts down if there are too many failures
+            if failures > 3:
+                connected = False
+
             try:
-                print(socket_id, socket_url)
-                async with self.session.ws_connect(socket_url) as ws:
-                    msg = await ws.receive()
+                logger.debug(f"Socket for {socket_id} opened. URL {socket_url}")
+                async with self.session.ws_connect(socket_url, timeout=60) as ws:
+                    # Loop that recieves messages
+                    while self.running and connected:
+                        msg = await ws.receive()
 
-                    if msg.type == aiohttp.WSMsgType.TEXT:
-                        self.ingest_queue.put(IngestItem("socket:" + socket_id, msg.data))
-                    elif msg.type == aiohttp.WSMsgType.ERROR:
-                        logging.debug("Stream %s errored.", socket_id)
-                    elif msg.type == aiohttp.WSMsgType.CLOSING:
-                        logging.warning("Stream %s is closing on the other end.", socket_id)
-
-                    connected = False
-                    logging.debug("Stream %s peacefully closed.", socket_id)
+                        if msg.type == aiohttp.WSMsgType.TEXT:
+                            self.ingest_queue.put(IngestItem("socket:" + socket_id, msg.data))
+                        elif msg.type == aiohttp.WSMsgType.ERROR:
+                            logger.debug("Stream %s errored.", socket_id)
+                            failures += 1
+                            break
+                        elif msg.type == aiohttp.WSMsgType.CLOSING:
+                            logger.warning("Stream %s is closing on the other end.", socket_id)
+                            connected = False
+                            break
+                        elif msg.type == aiohttp.WSMsgType.CLOSED:
+                            logger.warning("Stream %s is closed.", socket_id)
+                            connected = False
+                            break
+                        else:
+                            logger.warning("Unknown message type: %r", msg.type)
             except aiohttp.WSServerHandshakeError as e:
                 print("Stream %s failed to connect. Status code %s Message '%s'" % (socket_id, e.code, e.message), flush=True)
-                await asyncio.sleep((failures * 0.5) + 1)
                 failures += 1
-                if failures > 3:
-                    connected = False
 
+        connected = False
         logger.debug(datetime.datetime.now().isoformat() + socket_id + " has died")
 
     # Management code
@@ -239,7 +230,6 @@ class Dumper:
         self.tasks.append(asyncio.create_task(self.refresh_reddit_auth()))
         self.tasks.append(asyncio.create_task(self.process_queues()))
         self.tasks.append(asyncio.create_task(self.scrape_seed()))
-        self.tasks.append(asyncio.create_task(self.do_heartbeats()))
 
         # Hold until all tasks are done.
         await asyncio.gather(*self.tasks)

@@ -1,5 +1,6 @@
 import praw
 import os
+import time
 
 def create_praw() -> praw.Reddit:
     extra_args = {}
@@ -16,3 +17,11 @@ def create_praw() -> praw.Reddit:
         user_agent='RPAN scraper by u/nepeat',
         **extra_args
     )
+
+class IngestItem:
+    __slots__ = ["tag", "time", "data"]
+    def __init__(self, tag: str, data: str):
+        self.tag = tag
+        self.data = data
+
+        self.time = int(time.time())
