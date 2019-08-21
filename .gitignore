@@ -10,3 +10,5 @@ __pycache__
 *.mp4
 *.mkv
 *.ts
+
+.*DS_Store*
