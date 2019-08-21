@@ -61,7 +61,9 @@ class HLSDumper:
                     self.science["hls_count"] += 1
 
             # Update redis science hash.
-            await self.redis.hmset_dict("rpan:science:hlsdumper", self.science)
+            for key, value in self.science.copy().items():
+                await self.redis.hincrby("rpan:science:hlsdumper", key, increment=value)
+                self.science[key] = 0
 
             # Sleep for 3 seconds.
             await asyncio.sleep(3)

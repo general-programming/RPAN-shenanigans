@@ -136,7 +136,9 @@ class Dumper:
             self.science["unprocessed_events"] = self.ingest_queue.qsize()
 
             # Update redis science hash.
-            await self.redis.hmset_dict("rpan:science:socketdumper", self.science)
+            for key, value in self.science.copy().items():
+                await self.redis.hincrby("rpan:science:socketdumper", key, increment=value)
+                self.science[key] = 0
 
             # Sleep for 3 seconds.
             await asyncio.sleep(3)

@@ -5,3 +5,4 @@ redis
 hiredis
 uvloop
 sentry-sdk
+prometheus_client
