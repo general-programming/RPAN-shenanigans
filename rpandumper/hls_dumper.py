@@ -88,7 +88,7 @@ class HLSDumper:
         # ffmpeg -live_start_index 0 -i "$1" /vol/streams/$STREAM_NAME.$(date +%s).ts
         proc = await asyncio.create_subprocess_shell(
             # tasty shell injection
-            f'ffmpeg -live_start_index 0 -i "{hls_url}" -c copy /srv/rpan/data/streams/{stream_id}/$(date +%s).ts',
+            f'ffmpeg -live_start_index 0 -i "{hls_url}" -c:v libx265 -x265-params crf=23 -c:a copy /srv/rpan/data/streams/{stream_id}/$(date +%s).mkv',
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             loop=self.loop
