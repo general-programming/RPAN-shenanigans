@@ -1,0 +1,7 @@
+aiohttp
+praw
+aioredis
+redis
+hiredis
+uvloop
+sentry-sdk
