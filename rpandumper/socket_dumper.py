@@ -59,6 +59,8 @@ class Dumper:
             connector=conn,
         )
 
+        self.science = defaultdict(lambda: 0)
+
     def loop_error(self, loop, context):
         """Ignore aiohttp #3535 / cpython #13548 issue with SSL data after close
 
@@ -100,6 +102,7 @@ class Dumper:
         while self.running:
             self.reddit.user.me(False)
             await asyncio.sleep(120)
+            self.science_incr("auth_refresh")
 
     async def process_queues(self):
         while self.running:
@@ -108,6 +111,7 @@ class Dumper:
                 item = self.ingest_queue.get()
                 await self.redis.zadd("rpan:events:" + item.tag, item.time, item.data)
                 await self.redis.publish("rpan:events:" + item.tag, item.data)
+                self.science_incr("event_processed")
 
     @property
     def reddit_headers(self):
@@ -118,11 +122,35 @@ class Dumper:
             "Authorization": "Bearer " + self.reddit._core._authorizer.access_token
         }
 
+    # Science
+    async def thanos_cock(self):
+        while self.running:
+            # Update socket count
+            self.science["socket_count"] = 0
+
+            for task in self.sockets_ingesting.values():
+                if task and not task.done():
+                    self.science["socket_count"] += 1
+
+            # Unprocessed event count
+            self.science["unprocessed_events"] = self.ingest_queue.qsize()
+
+            # Update redis science hash.
+            await self.redis.hmset_dict("rpan:science:socketdumper", self.science)
+
+            # Sleep for 3 seconds.
+            await asyncio.sleep(3)
+
+    def science_incr(self, key):
+        self.science["key"] += 1
+
     # Seed related code
     async def scrape_seed(self):
         while self.running:
             await asyncio.sleep(3)
             async with self.session.get("https://strapi.reddit.com/videos/seed", allow_redirects=True) as response:
+                self.science_incr("seed_fetch")
+
                 # Parse data JSON.
                 _data = await response.text()
                 self.ingest_queue.put(IngestItem("seed_response", _data))
@@ -139,6 +167,7 @@ class Dumper:
                 if not seed_data:
                     logger.debug("Seed data is empty?")
                     logger.debug(data)
+                    self.science_incr("empty_seed")
                 await self.parse_seed(seed_data)
 
     async def parse_seed(self, seed_data: dict):
@@ -174,6 +203,7 @@ class Dumper:
                 return
 
         self.sockets_ingesting[socket_id] = asyncio.create_task(self._vore_socket(socket_id, socket_url))
+        self.science_incr("socket_opened")
 
     async def _vore_socket(self, socket_id: str, socket_url: str):
         connected = True
@@ -181,6 +211,7 @@ class Dumper:
 
         if not socket_url:
             logger.debug("bogon")
+            self.science_incr("socket_bogon")
             return
 
         # Loop that reconnects connections
@@ -203,24 +234,30 @@ class Dumper:
                             self.ingest_queue.put(IngestItem("socket:" + socket_id, msg.data))
                         elif msg.type == aiohttp.WSMsgType.ERROR:
                             logger.debug("Stream %s errored.", socket_id)
+                            self.science_incr("socket_error")
                             failures += 1
                             break
                         elif msg.type == aiohttp.WSMsgType.CLOSING:
                             logger.warning("Stream %s is closing on the other end.", socket_id)
                             connected = False
+                            self.science_incr("socket_closing")
                             break
                         elif msg.type == aiohttp.WSMsgType.CLOSED:
                             logger.warning("Stream %s is closed.", socket_id)
                             connected = False
+                            self.science_incr("socket_closed")
                             break
                         else:
                             logger.warning("Unknown message type: %r", msg.type)
+                            self.science_incr("socket_unknown")
             except aiohttp.WSServerHandshakeError as e:
                 print("Stream %s failed to connect. Status code %s Message '%s'" % (socket_id, e.code, e.message), flush=True)
                 failures += 1
+                self.science_incr("socket_handshake_fail")
 
         connected = False
         logger.debug(datetime.datetime.now().isoformat() + socket_id + " has died")
+        self.science_incr("socket_task_close")
 
     # Management code
     async def _run(self):
@@ -230,6 +267,7 @@ class Dumper:
         self.tasks.append(asyncio.create_task(self.refresh_reddit_auth()))
         self.tasks.append(asyncio.create_task(self.process_queues()))
         self.tasks.append(asyncio.create_task(self.scrape_seed()))
+        self.tasks.append(asyncio.create_task(self.thanos_cock()))
 
         # Hold until all tasks are done.
         await asyncio.gather(*self.tasks)
