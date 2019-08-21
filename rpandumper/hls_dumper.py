@@ -83,12 +83,13 @@ class HLSDumper:
 
     async def _vore_hls(self, stream_id: str, hls_url: str):
         # disgusting hardcoded path
-        os.makedirs(f"/srv/rpan/data/streams/{stream_id}", exist_ok=True)
+        STREAMS_BASE = "/mnt/gp_files/reddit_rpan/data/streams"
+        os.makedirs(f"{STREAMS_BASE}/{stream_id}", exist_ok=True)
 
         # ffmpeg -live_start_index 0 -i "$1" /vol/streams/$STREAM_NAME.$(date +%s).ts
         proc = await asyncio.create_subprocess_shell(
             # tasty shell injection
-            f'ffmpeg -live_start_index 0 -i "{hls_url}" -c:v libx265 -x265-params crf=23 -c:a copy /srv/rpan/data/streams/{stream_id}/$(date +%s).mkv',
+            f'ffmpeg -live_start_index 0 -i "{hls_url}" -c copy {STREAMS_BASE}/{stream_id}/$(date +%s).ts',
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             loop=self.loop
