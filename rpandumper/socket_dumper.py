@@ -225,7 +225,7 @@ class Dumper:
         failures = 0
 
         if not socket_url:
-            logger.debug("bogon")
+            logger.error("bogon")
             self.science_incr("socket_bogon")
             return
 
