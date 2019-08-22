@@ -137,7 +137,10 @@ class Dumper:
 
             # Update redis science hash.
             for key, value in self.science.copy().items():
-                await self.redis.hincrby("rpan:science:socketdumper", key, increment=value)
+                if key in ("socket_count", "unprocessed_events"):
+                    await self.redis.hset("rpan:science:socketdumper", key, value)
+                else:
+                    await self.redis.hincrby("rpan:science:socketdumper", key, increment=value)
                 self.science[key] = 0
 
             # Sleep for 3 seconds.
@@ -229,7 +232,7 @@ class Dumper:
 
             try:
                 logger.debug(f"Socket for {socket_id} opened. URL {socket_url}")
-                async with self.session.ws_connect(socket_url, timeout=60) as ws:
+                async with self.session.ws_connect(socket_url, timeout=20) as ws:
                     # Loop that recieves messages
                     while self.running and connected:
                         msg = await ws.receive()
