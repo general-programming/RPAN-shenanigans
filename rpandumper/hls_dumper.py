@@ -2,7 +2,6 @@ import logging
 import asyncio
 import os
 import json
-import queue
 import uuid
 import ssl
 import datetime
@@ -62,7 +61,10 @@ class HLSDumper:
 
             # Update redis science hash.
             for key, value in self.science.copy().items():
-                await self.redis.hincrby("rpan:science:hlsdumper", key, increment=value)
+                if key in ("hls_count"):
+                    await self.redis.hset("rpan:science:hlsdumper", key, value)
+                else:
+                    await self.redis.hincrby("rpan:science:hlsdumper", key, increment=value)
                 self.science[key] = 0
 
             # Sleep for 3 seconds.
@@ -127,15 +129,15 @@ class HLSDumper:
         # ffmpeg -live_start_index 0 -i "$1" /vol/streams/$STREAM_NAME.$(date +%s).ts
         proc = await asyncio.create_subprocess_shell(
             # tasty shell injection
-            f'ffmpeg -live_start_index 0 -i "{hls_url}" -c copy {STREAMS_BASE}/{stream_id}/$(date +%s).ts',
+            f'ffmpeg -live_start_index 1 -i "{hls_url}" -c copy {STREAMS_BASE}/{stream_id}/$(date +%s).ts',
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             loop=self.loop
         )
 
         stdout, stderr = await proc.communicate()
-        logger.debug(f'[{stream_id} exited with {proc.returncode}]')
         self.science_incr("ffmpeg_status_%s" % (proc.returncode))
+        logger.debug(f'[{stream_id} exited with {proc.returncode}]')
 
     # Management code
     async def _run(self):
