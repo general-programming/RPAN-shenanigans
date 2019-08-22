@@ -40,6 +40,7 @@ class Dumper:
         self.tasks = []
         self.ingest_queue = queue.Queue()
         self.sockets_ingesting = {}
+        self.active_rooms = set()
 
         self.reddit = create_praw()
         self.redis = aioredis.create_redis_pool(
@@ -178,7 +179,9 @@ class Dumper:
                 await self.parse_seed(seed_data)
 
     async def parse_seed(self, seed_data: dict):
-        # code that saves api response to redis
+        self.active_rooms.clear()
+
+        # Creates sockets for each room.
         for stream in seed_data:
             updates_websocket = stream.get("updates_websocket", None)
             post_data = stream.get("post", {"id": "unknown_" + str(uuid.uuid4())})
@@ -193,6 +196,7 @@ class Dumper:
                 live_comments_websocket = post_data.get("liveCommentsWebsocket", None)
                 if live_comments_websocket:
                     # DIRTY HACK
+                    # 08/22/2019 STILL A DIRTY HACK HACK HACK BUT IT WORKS
                     wsdomain = random.choice([
                         "05ba9e4989f78959d",
                         "00b2ec7e0811b4d7a",
@@ -201,7 +205,11 @@ class Dumper:
                         "021face97bba27158",
                     ])
                     live_comments_websocket = live_comments_websocket.replace("reddit.com", f"ws-{wsdomain}.wss.redditmedia.com")
-                    await self.vore_socket("comments_" + post_data["id"], live_comments_websocket)
+
+                    # Create the socket and yeet off into the sun.
+                    room_id = "comments_" + post_data["id"]
+                    self.active_rooms.add(room_id)
+                    await self.vore_socket(room_id, live_comments_websocket)
 
     # Websocket ingest code
     async def vore_socket(self, socket_id: str, socket_url: str):
@@ -235,7 +243,20 @@ class Dumper:
                 async with self.session.ws_connect(socket_url, timeout=20) as ws:
                     # Loop that recieves messages
                     while self.running and connected:
-                        msg = await ws.receive()
+                        # Loop that checks if the room is alive if we timeout on message receieve.
+                        try:
+                            msg = await asyncio.wait_for(ws.receive(), timeout=60)
+                        except asyncio.TimeoutError:
+                            # The room is still active, carry on.
+                            if socket_id in self.active_rooms:
+                                continue
+
+                            # Yeet the room if it is not active.
+                            await ws.close()
+                            logger.info("Stream %s has timed out.", socket_id)
+                            connected = False
+                            self.science_incr("socket_timeout")
+                            break
 
                         if msg.type == aiohttp.WSMsgType.TEXT:
                             self.ingest_queue.put(IngestItem("socket:" + socket_id, msg.data))
