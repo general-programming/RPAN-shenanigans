@@ -30,10 +30,10 @@ if __name__ == '__main__':
     # Start up the server to expose the metrics.
     start_http_server(8000)
 
-    # Load the gauges every 3 seconds.
+    # Load the gauges every 0.5 seconds.
     try:
         while True:
             update_gauges()
-            time.sleep(3)
+            time.sleep(0.5)
     except KeyboardInterrupt:
         pass
