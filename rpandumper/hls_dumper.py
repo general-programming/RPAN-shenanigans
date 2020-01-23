@@ -6,23 +6,22 @@ import uuid
 import ssl
 import datetime
 import traceback
-
-from collections import defaultdict
+import random
 
 import aiohttp
 import aioredis
 
+from rpandumper.common import BaseWorker
 
-logger = logging.getLogger("rpandumper")
+
+logger = logging.getLogger("rpandumper.hlsdumper")
 
 # XXX HACK LOL
 logger.setLevel(level=logging.DEBUG)
 
-class HLSDumper:
+class HLSDumper(BaseWorker):
     def __init__(self, loop: asyncio.BaseEventLoop):
-        self.loop = loop
-        self.loop.set_exception_handler(self.loop_error)
-        self.running = True
+        super().__init__(loop)
         self.tasks = []
         self.sockets_ingesting = {}
 
@@ -44,11 +43,6 @@ class HLSDumper:
             connector=conn,
         )
 
-        self.science = defaultdict(lambda: 0)
-
-    def loop_error(self, loop, context):
-        print(context)
-
     # Science
     async def thanos_cock(self):
         while self.running:
@@ -67,39 +61,10 @@ class HLSDumper:
                     await self.redis.hincrby("rpan:science:hlsdumper", key, increment=value)
                 self.science[key] = 0
 
-            # Sleep for 3 seconds.
-            await asyncio.sleep(3)
+            # Sleep for 0.5 seconds.
+            await asyncio.sleep(0.5)
 
-    def science_incr(self, key):
-        self.science[key] += 1
-
-    # Seed related code
-    async def scrape_seed(self):
-        while self.running:
-            await asyncio.sleep(5)
-            async with self.session.get("https://strapi.reddit.com/videos/seed", allow_redirects=True) as response:
-                self.science_incr("seed_fetch")
-
-                # Parse data JSON.
-                _data = await response.text()
-
-                try:
-                    data = json.loads(_data)
-                except json.JSONDecodeError:
-                    logger.warning("Couldn't parse seed data. Status code %d.", response.status)
-                    logging.debug(_data)
-                    continue
-
-                # Save data and parse.
-                seed_data = data.get("data", [])
-                if not seed_data:
-                    logging.debug("Seed data is empty?")
-                    logging.debug(data)
-                    self.science_incr("empty_seed")
-                    continue
-
-                await self.parse_seed(seed_data)
-
+    # Seed parser code
     async def parse_seed(self, seed_data: dict):
         for stream in seed_data:
             post_data = stream.get("post", {"id": "unknown_" + str(uuid.uuid4())})
@@ -122,6 +87,17 @@ class HLSDumper:
         self.science_incr("hls_opened")
 
     async def _vore_hls(self, stream_id: str, hls_url: str):
+        # Drop the stream grab attempt if ffmpeg was already run above a certain magic number.
+        # Not a good sign if ffmpeg crashes a lot.
+        try:
+            grabs = int(await self.redis.hget("rpan:hls:grabs", stream_id))
+        except (TypeError, ValueError):
+            grabs = 0
+
+        if grabs > 15:
+            logger.debug("%s DROPPED: overgrab [%d]", stream_id, grabs)
+            return
+
         # disgusting hardcoded path
         STREAMS_BASE = "/mnt/gp_files/reddit_rpan/data/streams"
         os.makedirs(f"{STREAMS_BASE}/{stream_id}", exist_ok=True)
@@ -129,38 +105,17 @@ class HLSDumper:
         # ffmpeg -live_start_index 0 -i "$1" /vol/streams/$STREAM_NAME.$(date +%s).ts
         proc = await asyncio.create_subprocess_shell(
             # tasty shell injection
-            f'ffmpeg -live_start_index 1 -i "{hls_url}" -c copy {STREAMS_BASE}/{stream_id}/$(date +%s).ts',
+            f'ffmpeg -live_start_index 1 -i "{hls_url}" -c copy -map 0 {STREAMS_BASE}/{stream_id}/$(date +%s).mkv',
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             loop=self.loop
         )
 
+        # Print and log stream grabs.
         stdout, stderr = await proc.communicate()
         self.science_incr("ffmpeg_status_%s" % (proc.returncode))
-        logger.debug(f'[{stream_id} exited with {proc.returncode}]')
-
-    # Management code
-    async def _run(self):
-        self.redis = await self.redis
-
-        # Tasks
-        self.tasks.append(asyncio.create_task(self.scrape_seed()))
-        self.tasks.append(asyncio.create_task(self.thanos_cock()))
-
-        # Hold until all tasks are done.
-        await asyncio.gather(*self.tasks)
-
-    async def cleanup(self):
-        self.redis.close()
-        await self.redis.wait_closed()
-        self.running = False
-
-    def run(self):
-        try:
-            self.loop.run_until_complete(self._run())
-        except KeyboardInterrupt:
-            logger.info("KeyboardInterrupt caught, cleaning up?")
-            self.loop.run_until_complete(self.cleanup())
+        logger.debug(f'[{stream_id} exited with {proc.returncode}, {grabs} grabs]')
+        await self.redis.hincrby("rpan:hls:grabs", stream_id)
 
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()

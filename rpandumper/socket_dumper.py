@@ -11,14 +11,12 @@ import datetime
 import traceback
 import random
 
-from collections import defaultdict
-
 import aiohttp
 import aioredis
 
-from rpandumper.common import create_praw, IngestItem
+from rpandumper.common import IngestItem, BaseWorker
 
-logger = logging.getLogger("rpandumper")
+logger = logging.getLogger("rpandumper.socketdumper")
 
 # XXX HACK LOL
 logger.setLevel(level=logging.DEBUG)
@@ -32,17 +30,17 @@ except ImportError:
 else:
     SSL_PROTOCOLS = (*SSL_PROTOCOLS, uvloop.loop.SSLProtocol)
 
-class Dumper:
+class Dumper(BaseWorker):
     def __init__(self, loop: asyncio.BaseEventLoop):
-        self.loop = loop
-        self.loop.set_exception_handler(self.loop_error)
-        self.running = True
-        self.tasks = []
+        super().__init__(loop)
+
+        # Socket dumper queue dumper task.
+        self.extra_tasks.append(self.process_queues)
+
         self.ingest_queue = queue.Queue()
         self.sockets_ingesting = {}
         self.active_rooms = set()
 
-        self.reddit = create_praw()
         self.redis = aioredis.create_redis_pool(
             os.environ.get("REDIS_URL", "redis://localhost"),
             minsize=5,
@@ -60,51 +58,7 @@ class Dumper:
             connector=conn,
         )
 
-        self.science = defaultdict(lambda: 0)
-
-    def loop_error(self, loop, context):
-        """Ignore aiohttp #3535 / cpython #13548 issue with SSL data after close
-
-        There is an issue in Python 3.7 up to 3.7.3 that over-reports a
-        ssl.SSLError fatal error (ssl.SSLError: [SSL: KRB5_S_INIT] application data
-        after close notify (_ssl.c:2609)) after we are already done with the
-        connection. See GitHub issues aio-libs/aiohttp#3535 and
-        python/cpython#13548.
-
-        Given a loop, this sets up an exception handler that ignores this specific
-        exception, but passes everything else on to the previous exception handler
-        this one replaces.
-
-        Checks for fixed Python versions, disabling itself when running on 3.7.4+
-        or 3.8.
-
-        """
-        if sys.version_info <= (3, 7, 4):
-            if context.get("message") in {
-                "SSL error in data received",
-                "Fatal error on transport",
-            }:
-                # validate we have the right exception, transport and protocol
-                exception = context.get('exception')
-                protocol = context.get('protocol')
-                if (
-                    isinstance(exception, ssl.SSLError)
-                    and exception.reason == 'KRB5_S_INIT'
-                    and isinstance(protocol, SSL_PROTOCOLS)
-                ):
-                    if loop.get_debug():
-                        asyncio.log.logger.debug('Ignoring asyncio SSL KRB5_S_INIT error')
-                    return
-
-        print(context)
-
     # Ingest / Utility
-    async def refresh_reddit_auth(self):
-        while self.running:
-            self.reddit.user.me(False)
-            await asyncio.sleep(120)
-            self.science_incr("auth_refresh")
-
     async def process_queues(self):
         while self.running:
             await asyncio.sleep(0.1)
@@ -113,15 +67,6 @@ class Dumper:
                 await self.redis.zadd("rpan:events:" + item.tag, item.time, item.data)
                 await self.redis.publish("rpan:events:" + item.tag, item.data)
                 self.science_incr("event_processed")
-
-    @property
-    def reddit_headers(self):
-        if not self.reddit._core._authorizer.access_token:
-            self.reddit.user.me(False)
-
-        return {
-            "Authorization": "Bearer " + self.reddit._core._authorizer.access_token
-        }
 
     # Science
     async def thanos_cock(self):
@@ -144,40 +89,10 @@ class Dumper:
                     await self.redis.hincrby("rpan:science:socketdumper", key, increment=value)
                 self.science[key] = 0
 
-            # Sleep for 3 seconds.
-            await asyncio.sleep(3)
+            # Sleep for 0.5 seconds.
+            await asyncio.sleep(0.5)
 
-    def science_incr(self, key):
-        self.science[key] += 1
-
-    # Seed related code
-    async def scrape_seed(self):
-        while self.running:
-            await asyncio.sleep(3)
-            async with self.session.get("https://strapi.reddit.com/videos/seed", allow_redirects=True) as response:
-                self.science_incr("seed_fetch")
-
-                # Parse data JSON.
-                _data = await response.text()
-                self.ingest_queue.put(IngestItem("seed_response", _data))
-
-                try:
-                    data = json.loads(_data)
-                except json.JSONDecodeError:
-                    logger.warning("Couldn't parse seed data. Status code %d.", response.status)
-                    logger.debug(_data)
-                    continue
-
-                # Save data and parse.
-                seed_data = data.get("data", [])
-                if not seed_data:
-                    logger.debug("Seed data is empty?")
-                    logger.debug(data)
-                    self.science_incr("empty_seed")
-                    continue
-
-                await self.parse_seed(seed_data)
-
+    # Seed parser code
     async def parse_seed(self, seed_data: dict):
         self.active_rooms.clear()
 
@@ -197,14 +112,14 @@ class Dumper:
                 if live_comments_websocket:
                     # DIRTY HACK
                     # 08/22/2019 STILL A DIRTY HACK HACK HACK BUT IT WORKS
-                    wsdomain = random.choice([
-                        "05ba9e4989f78959d",
-                        "00b2ec7e0811b4d7a",
-                        "05b875714591d37f6",
-                        "093e8f4e67ed67e08",
-                        "021face97bba27158",
-                    ])
-                    live_comments_websocket = live_comments_websocket.replace("reddit.com", f"ws-{wsdomain}.wss.redditmedia.com")
+                    # 01/23/2020 Seems reddit is returning sane redditmedia URLs now. Pls nuke later.
+                    # wsdomain = random.choice([
+                    #     "00b2ec7e0811b4d7a",
+                    #     "05b875714591d37f6",
+                    #     "093e8f4e67ed67e08",
+                    #     "021face97bba27158",
+                    # ])
+                    # live_comments_websocket = live_comments_websocket.replace("reddit.com", f"ws-{wsdomain}.wss.redditmedia.com")
 
                     # Create the socket and yeet off into the sun.
                     room_id = "comments_" + post_data["id"]
@@ -287,33 +202,6 @@ class Dumper:
         connected = False
         logger.debug(datetime.datetime.now().isoformat() + socket_id + " has died")
         self.science_incr("socket_task_close")
-
-    # Management code
-    async def _run(self):
-        self.redis = await self.redis
-
-        # Tasks
-        self.tasks.append(asyncio.create_task(self.refresh_reddit_auth()))
-        self.tasks.append(asyncio.create_task(self.process_queues()))
-        self.tasks.append(asyncio.create_task(self.scrape_seed()))
-        self.tasks.append(asyncio.create_task(self.thanos_cock()))
-
-        # Hold until all tasks are done.
-        await asyncio.gather(*self.tasks)
-
-    async def cleanup(self):
-        self.running = False
-        self.redis.close()
-        await self.redis.wait_closed()
-        # for task in self.tasks:
-        #     task.cancel()
-
-    def run(self):
-        try:
-            self.loop.run_until_complete(self._run())
-        except KeyboardInterrupt:
-            logger.info("KeyboardInterrupt caught, cleaning up?")
-            self.loop.run_until_complete(self.cleanup())
 
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
