@@ -6,3 +6,6 @@ hiredis
 uvloop
 sentry-sdk
 prometheus_client
+sqlalchemy
+psycopg2
+alembic
