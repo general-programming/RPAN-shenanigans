@@ -5,7 +5,11 @@ r = redis.StrictRedis()
 p = r.pubsub(ignore_subscribe_messages=True)
 
 def handle_rpan_event(event):
-    data = json.loads(event["data"])
+    try:
+        data = json.loads(event["data"])
+    except json.JSONDecodeError:
+        print(event["data"])
+
     try:
         payload = data['payload']
     except KeyError:
