@@ -87,6 +87,7 @@ class HLSDumper(BaseWorker):
         self.science_incr("hls_opened")
 
     async def _vore_hls(self, stream_id: str, hls_url: str):
+        # HACK: Very disgusting. It sure beats having more than $MAX 512 byte - 1 GB files on the disk.
         # Drop the stream grab attempt if ffmpeg was already run above a certain magic number.
         # Not a good sign if ffmpeg crashes a lot.
         try:
