@@ -11,7 +11,7 @@ import random
 import aiohttp
 import aioredis
 
-from rpandumper.common import BaseWorker
+from rpandumper.common import BaseWorker, STREAMS_BASE
 
 
 logger = logging.getLogger("rpandumper.hlsdumper")
@@ -99,8 +99,7 @@ class HLSDumper(BaseWorker):
             logger.debug("%s DROPPED: overgrab [%d]", stream_id, grabs)
             return
 
-        # disgusting hardcoded path
-        STREAMS_BASE = "/mnt/gp_files/reddit_rpan/data/streams"
+        # Create the stream folder if it does not exist.
         os.makedirs(f"{STREAMS_BASE}/{stream_id}", exist_ok=True)
 
         # start_index observations:

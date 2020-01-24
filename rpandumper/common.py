@@ -10,6 +10,10 @@ from collections import defaultdict
 
 logger = logging.getLogger("rpandumper.common")
 
+# Common constants
+STREAMS_BASE = os.environ["STREAMS_BASE"]
+
+# Utility helpers
 def create_praw() -> praw.Reddit:
     extra_args = {}
 
@@ -26,6 +30,7 @@ def create_praw() -> praw.Reddit:
         **extra_args
     )
 
+# TODO: Explain what is this magical dataclass.
 class IngestItem:
     __slots__ = ["tag", "time", "data"]
     def __init__(self, tag: str, data: str):
@@ -34,6 +39,7 @@ class IngestItem:
 
         self.time = int(time.time())
 
+# Common code shared between HLS, socket dumper, and other future workers.
 class BaseWorker:
     def __init__(self, loop: asyncio.BaseEventLoop):
         self.loop = loop
