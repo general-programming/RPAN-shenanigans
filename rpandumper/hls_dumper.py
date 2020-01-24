@@ -102,10 +102,14 @@ class HLSDumper(BaseWorker):
         STREAMS_BASE = "/mnt/gp_files/reddit_rpan/data/streams"
         os.makedirs(f"{STREAMS_BASE}/{stream_id}", exist_ok=True)
 
-        # ffmpeg -live_start_index 0 -i "$1" /vol/streams/$STREAM_NAME.$(date +%s).ts
+        # start_index observations:
+        #   - We might lose at least a "small" chunk of the start of the video because if the index is 1.
+        #   - We start at 0 or 1 since sometimes the 0th index is corrupt due to reasons yet to be known by me.
+        #   - Someone more competent will know exactly why this is breaking instead of me using a snake ass oil fix..
+        start_index = random.randint(0, 1)
         proc = await asyncio.create_subprocess_shell(
             # tasty shell injection
-            f'ffmpeg -live_start_index 1 -i "{hls_url}" -c copy -map 0 {STREAMS_BASE}/{stream_id}/$(date +%s).mkv',
+            f'ffmpeg -live_start_index {start_index} -i "{hls_url}" -c copy -map 0 {STREAMS_BASE}/{stream_id}/$(date +%s).mkv',
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             loop=self.loop
