@@ -94,7 +94,7 @@ class HLSDumper(BaseWorker):
         except (TypeError, ValueError):
             grabs = 0
 
-        if grabs > 15:
+        if grabs > 35:
             logger.debug("%s DROPPED: overgrab [%d]", stream_id, grabs)
             return
 
