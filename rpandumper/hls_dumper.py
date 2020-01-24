@@ -100,7 +100,9 @@ class HLSDumper(BaseWorker):
             return
 
         # Create the stream folder if it does not exist.
-        os.makedirs(f"{STREAMS_BASE}/{stream_id}", exist_ok=True)
+        current_dayfolder = datetime.datetime.utcnow().strftime("raws-%d-%m-%Y")
+        stream_folder = os.path.join(STREAMS_BASE, current_dayfolder, stream_id)
+        os.makedirs(stream_folder, exist_ok=True)
 
         # start_index observations:
         #   - We might lose at least a "small" chunk of the start of the video because if the index is 1.
@@ -109,7 +111,7 @@ class HLSDumper(BaseWorker):
         start_index = random.randint(0, 1)
         proc = await asyncio.create_subprocess_shell(
             # tasty shell injection
-            f'ffmpeg -live_start_index {start_index} -i "{hls_url}" -c copy -map 0 {STREAMS_BASE}/{stream_id}/$(date +%s).mkv',
+            f'ffmpeg -live_start_index {start_index} -i "{hls_url}" -c copy -map 0 {stream_folder}/$(date +%s).mkv',
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             loop=self.loop
