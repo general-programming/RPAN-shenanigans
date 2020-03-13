@@ -7,12 +7,13 @@ if "SENTRY_DSN" in os.environ:
     from sentry_sdk.integrations.excepthook import ExcepthookIntegration
     from sentry_sdk.integrations.stdlib import StdlibIntegration
     from sentry_sdk.integrations.threading import ThreadingIntegration
-    sentry_sdk.init(os.environ["SENTRY_DSN"], integrations=[
+    sentry_sdk.init(dsn=os.environ["SENTRY_DSN"], integrations=[
          LoggingIntegration(),
          ExcepthookIntegration(always_run=True),
          StdlibIntegration(),
         ThreadingIntegration()
     ])
+    print("sentry handlers installed")
 
 import uvloop
 
