@@ -12,6 +12,9 @@ redis = StrictRedis(
 )
 
 # Write out seed responses
+print("Loading seed responses. {seeds} to load.".format(
+    seeds=redis.zcard("rpan:events:seed_response")
+))
 for raw_response, score in redis.zrange("rpan:events:seed_response", 0, -1, withscores=True):
     timestamp = datetime.datetime.utcfromtimestamp(score)
     try:
@@ -26,6 +29,8 @@ for raw_response, score in redis.zrange("rpan:events:seed_response", 0, -1, with
     db.add(new_response)
     db.commit()
     redis.zrem("rpan:events:seed_response", raw_response)
+    print(".", end="", flush=True)
+print("\nSeed dump completed.")
 
 # Write out comment responses
 comments_found = 0
