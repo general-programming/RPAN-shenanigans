@@ -5,6 +5,8 @@ import sys
 import asyncio
 import json
 import logging
+import redis
+import random
 
 from collections import defaultdict
 
@@ -29,6 +31,9 @@ def create_praw() -> praw.Reddit:
         user_agent='RPAN scraper by u/nepeat',
         **extra_args
     )
+
+def create_redis() -> redis.StrictRedis:
+    return redis.StrictRedis.from_url(os.environ.get("REDIS_URL", "redis://localhost"))
 
 # TODO: Explain what is this magical dataclass.
 class IngestItem:
@@ -99,9 +104,11 @@ class BaseWorker:
     # General seed scraper
     async def scrape_seed(self):
         while self.running:
+            # Coverage for both videos and broadcasts endpoints.
+            endpoint = random.choice(["videos", "broadcasts"])
             await asyncio.sleep(2)
             async with self.session.get(
-                "https://strapi.reddit.com/videos",
+                "https://strapi.reddit.com/" + endpoint,
                 # headers=self.reddit_headers,
                 allow_redirects=True,
             ) as response:
