@@ -11,6 +11,7 @@ import random
 import aiohttp
 import aioredis
 
+from sentry_sdk import capture_exception
 from rpandumper.common import BaseWorker, STREAMS_BASE
 
 
@@ -67,15 +68,21 @@ class HLSDumper(BaseWorker):
     # Seed parser code
     async def parse_seed(self, seed_data: dict):
         for stream in seed_data:
-            post_data = stream.get("post", {"id": "unknown_" + str(uuid.uuid4())})
-            stream_data = stream.get("stream", {})
+            try:
+                await self.parse_stream(stream)
+            except Exception as e:
+                capture_exception(e)
+    
+    async def parse_stream(self, stream: dict):
+        post_data = stream.get("post", {"id": "unknown_" + str(uuid.uuid4())})
+        stream_data = stream.get("stream", {})
 
-            # Do something with the HLS URL
-            if stream_data:
-                stream_id = stream_data.get("stream_id", "NOID_" + str(uuid.uuid4()))
-                hls_url = stream_data.get("hls_url", None)
-                if hls_url:
-                    await self.vore_hls(post_data["id"] + "_" + stream_id, hls_url)
+        # Do something with the HLS URL
+        if stream_data:
+            stream_id = stream_data.get("stream_id", "NOID_" + str(uuid.uuid4()))
+            hls_url = stream_data.get("hls_url", None)
+            if hls_url:
+                await self.vore_hls(post_data["id"] + "_" + stream_id, hls_url)
 
     # HLS ingest code
     async def vore_hls(self, stream_id: str, hls_url: str):
@@ -91,7 +98,7 @@ class HLSDumper(BaseWorker):
         # Drop the stream grab attempt if ffmpeg was already run above a certain magic number.
         # Not a good sign if ffmpeg crashes a lot.
         try:
-            grabs = int(await self.redis.hget("rpan:hls:grabs", stream_id))
+            grabs = int(await self.redis.hincrby("rpan:hls:grabs", stream_id))
         except (TypeError, ValueError):
             grabs = 0
 
@@ -121,7 +128,6 @@ class HLSDumper(BaseWorker):
         stdout, stderr = await proc.communicate()
         self.science_incr("ffmpeg_status_%s" % (proc.returncode))
         logger.debug(f'[{stream_id} exited with {proc.returncode}, {grabs} grabs]')
-        await self.redis.hincrby("rpan:hls:grabs", stream_id)
 
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()

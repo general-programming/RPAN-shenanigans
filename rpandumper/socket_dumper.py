@@ -14,6 +14,7 @@ import random
 import aiohttp
 import aioredis
 
+from sentry_sdk import capture_exception
 from rpandumper.common import IngestItem, BaseWorker
 
 logger = logging.getLogger("rpandumper.socketdumper")
@@ -98,33 +99,40 @@ class Dumper(BaseWorker):
 
         # Creates sockets for each room.
         for stream in seed_data:
-            updates_websocket = stream.get("updates_websocket", None)
-            post_data = stream.get("post", {"id": "unknown_" + str(uuid.uuid4())})
-            stream_data = stream.get("stream", {})
+            try:
+                await self._parse_seed(stream)
+            except Exception as e:
+                print(stream)
+                capture_exception(e)
 
-            # Do something with the updates websocket
-            # if updates_websocket:
-            #     await self.vore_socket("updates_" + post_data["id"], updates_websocket)
+    async def _parse_seed(self, stream: dict):
+        updates_websocket = stream.get("updates_websocket", None)
+        post_data = stream.get("post", {"id": "unknown_" + str(uuid.uuid4())})
+        stream_data = stream.get("stream", {})
 
-            # Do something with the comments websocket
-            if post_data:
-                live_comments_websocket = post_data.get("liveCommentsWebsocket", None)
-                if live_comments_websocket:
-                    # DIRTY HACK
-                    # 08/22/2019 STILL A DIRTY HACK HACK HACK BUT IT WORKS
-                    # 01/23/2020 Seems reddit is returning sane redditmedia URLs now. Pls nuke later.
-                    # wsdomain = random.choice([
-                    #     "00b2ec7e0811b4d7a",
-                    #     "05b875714591d37f6",
-                    #     "093e8f4e67ed67e08",
-                    #     "021face97bba27158",
-                    # ])
-                    # live_comments_websocket = live_comments_websocket.replace("reddit.com", f"ws-{wsdomain}.wss.redditmedia.com")
+        # Do something with the updates websocket
+        # if updates_websocket:
+        #     await self.vore_socket("updates_" + post_data["id"], updates_websocket)
 
-                    # Create the socket and yeet off into the sun.
-                    room_id = "comments_" + post_data["id"]
-                    self.active_rooms.add(room_id)
-                    await self.vore_socket(room_id, live_comments_websocket)
+        # Do something with the comments websocket
+        if post_data:
+            live_comments_websocket = post_data.get("liveCommentsWebsocket", None)
+            if live_comments_websocket:
+                # DIRTY HACK
+                # 08/22/2019 STILL A DIRTY HACK HACK HACK BUT IT WORKS
+                # 01/23/2020 Seems reddit is returning sane redditmedia URLs now. Pls nuke later.
+                # wsdomain = random.choice([
+                #     "00b2ec7e0811b4d7a",
+                #     "05b875714591d37f6",
+                #     "093e8f4e67ed67e08",
+                #     "021face97bba27158",
+                # ])
+                # live_comments_websocket = live_comments_websocket.replace("reddit.com", f"ws-{wsdomain}.wss.redditmedia.com")
+
+                # Create the socket and yeet off into the sun.
+                room_id = "comments_" + post_data["id"]
+                self.active_rooms.add(room_id)
+                await self.vore_socket(room_id, live_comments_websocket)
 
     # Websocket ingest code
     async def vore_socket(self, socket_id: str, socket_url: str):
